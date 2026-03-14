@@ -336,7 +336,7 @@ select {
 }
 
 /* Firefox support */
-* {
+:root {
   scrollbar-width: thin;
   scrollbar-color: var(--scrollbar-thumb) transparent;
 }
