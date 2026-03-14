@@ -29,7 +29,7 @@ export function validateAnthropicSetupToken(raw: string): string | undefined {
     return "Required";
   }
   if (!ANTHROPIC_SETUP_TOKEN_PREFIXES.some((prefix) => trimmed.startsWith(prefix))) {
-    return `Expected token starting with sk-ant-oat01- or sk-ant-api03-`;
+    return `Expected token starting with ${ANTHROPIC_SETUP_TOKEN_PREFIXES.join(" or ")}`;
   }
   if (trimmed.length < ANTHROPIC_SETUP_TOKEN_MIN_LENGTH) {
     return "Token looks too short; paste the full setup-token";
