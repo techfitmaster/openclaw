@@ -18,6 +18,7 @@ import { setGatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setVerbose } from "../../globals.js";
 import { GatewayLockError } from "../../infra/gateway-lock.js";
 import { formatPortDiagnostics, inspectPortUsage } from "../../infra/ports.js";
+import { findVerifiedGatewayListenerPidsOnPortSync } from "../../infra/gateway-processes.js";
 import { cleanStaleGatewayProcessesSync } from "../../infra/restart-stale-pids.js";
 import { setConsoleSubsystemFilter, setConsoleTimestampPrefix } from "../../logging/console.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -224,11 +225,34 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     return;
   }
   if (process.env.OPENCLAW_SERVICE_MARKER?.trim()) {
+    // First pass: kill stale gateway processes found via lsof by command name ("openclaw").
     const stale = cleanStaleGatewayProcessesSync(port);
     if (stale.length > 0) {
       gatewayLog.info(
         `service-mode: cleared ${stale.length} stale gateway pid(s) before bind on port ${port}`,
       );
+    }
+    // Second pass: kill any remaining gateway processes found via argv inspection.
+    // When the gateway runs as `node /path/to/openclaw ...`, lsof shows the command
+    // as "node" rather than "openclaw", so the first pass misses them. After a
+    // forced kill (SIGKILL / OOM), these orphan node processes hold port 18789 and
+    // prevent service restart. We detect them by checking process argv and kill them.
+    try {
+      const orphans = findVerifiedGatewayListenerPidsOnPortSync(port);
+      if (orphans.length > 0) {
+        gatewayLog.warn(
+          `service-mode: found ${orphans.length} orphan gateway process(es) on port ${port}: ${orphans.join(", ")} — killing`,
+        );
+        for (const pid of orphans) {
+          try {
+            process.kill(pid, "SIGKILL");
+          } catch {
+            // Process may have already exited.
+          }
+        }
+      }
+    } catch {
+      // Non-fatal: orphan cleanup is best-effort.
     }
   }
   if (opts.force) {
