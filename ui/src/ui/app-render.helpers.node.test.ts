@@ -3,8 +3,9 @@ import {
   isCronSessionKey,
   parseSessionKey,
   resolveSessionDisplayName,
+  resolveSessionOptionGroups,
 } from "./app-render.helpers.ts";
-import type { SessionsListResult } from "./types.ts";
+import type { AgentsListResult, SessionsListResult } from "./types.ts";
 
 type SessionRow = SessionsListResult["sessions"][number];
 
@@ -282,5 +283,98 @@ describe("isCronSessionKey", () => {
     expect(isCronSessionKey("main")).toBe(false);
     expect(isCronSessionKey("discord:group:eng")).toBe(false);
     expect(isCronSessionKey("agent:main:slack:cron:job:run:uuid")).toBe(false);
+  });
+});
+
+/* ================================================================
+ *  resolveSessionOptionGroups – agent dropdown stays complete
+ *  after session switches (regression guard for issue #48634)
+ * ================================================================ */
+
+function makeAgentsList(
+  agents: Array<{ id: string; name?: string }>,
+  mainKey = "main",
+): AgentsListResult {
+  return {
+    defaultId: agents[0]?.id ?? "main",
+    mainKey,
+    scope: "per-sender",
+    agents: agents.map((a) => ({ id: a.id, name: a.name })),
+  };
+}
+
+function makeSessionsResult(keys: string[]): SessionsListResult {
+  return {
+    ts: Date.now(),
+    path: "",
+    count: keys.length,
+    defaults: { model: null, contextTokens: null },
+    sessions: keys.map((key) => ({
+      key,
+      kind: "direct" as const,
+      updatedAt: Date.now(),
+    })),
+  };
+}
+
+function makeMinimalState(
+  sessionKey: string,
+  sessionsResult: SessionsListResult | null,
+  agentsList: AgentsListResult | null,
+): Parameters<typeof resolveSessionOptionGroups>[0] {
+  return {
+    sessionKey,
+    sessionsResult,
+    agentsList,
+    sessionsHideCron: true,
+  } as Parameters<typeof resolveSessionOptionGroups>[0];
+}
+
+describe("resolveSessionOptionGroups – multi-agent dropdown", () => {
+  it("includes all configured agents even if not in sessionsResult", () => {
+    // Simulate: main + test-agent configured, but only main has a session entry.
+    // This is the state after switching from test-agent → main when test-agent
+    // hasn't been recently active (activeMinutes filter).
+    const agentsList = makeAgentsList([{ id: "main" }, { id: "test-agent" }]);
+    const sessionsResult = makeSessionsResult(["agent:main:main"]);
+    const state = makeMinimalState("agent:main:main", sessionsResult, agentsList);
+
+    const groups = resolveSessionOptionGroups(state, "agent:main:main", sessionsResult);
+    const allKeys = groups.flatMap((g) => g.options.map((o) => o.key));
+
+    // Both agent main session keys must appear
+    expect(allKeys).toContain("agent:main:main");
+    expect(allKeys).toContain("agent:test-agent:main");
+  });
+
+  it("does not duplicate entries when agent main key is also in sessionsResult", () => {
+    const agentsList = makeAgentsList([{ id: "main" }, { id: "test-agent" }]);
+    const sessionsResult = makeSessionsResult(["agent:main:main", "agent:test-agent:main"]);
+    const state = makeMinimalState("agent:main:main", sessionsResult, agentsList);
+
+    const groups = resolveSessionOptionGroups(state, "agent:main:main", sessionsResult);
+    const allKeys = groups.flatMap((g) => g.options.map((o) => o.key));
+
+    // Each key should appear exactly once
+    const mainCount = allKeys.filter((k) => k === "agent:main:main").length;
+    const testCount = allKeys.filter((k) => k === "agent:test-agent:main").length;
+    expect(mainCount).toBe(1);
+    expect(testCount).toBe(1);
+  });
+
+  it("preserves current sessionKey in dropdown after switching sessions", () => {
+    // Simulates the user switching from test-agent to main.
+    // sessionsResult still only has main (activeMinutes filter stripped test-agent).
+    const agentsList = makeAgentsList([{ id: "main" }, { id: "test-agent" }]);
+    const sessionsResult = makeSessionsResult(["agent:main:main"]);
+    // Current sessionKey is now main after the switch
+    const state = makeMinimalState("agent:main:main", sessionsResult, agentsList);
+
+    const groups = resolveSessionOptionGroups(state, "agent:main:main", sessionsResult);
+    const allKeys = groups.flatMap((g) => g.options.map((o) => o.key));
+
+    expect(allKeys).toContain("agent:main:main");
+    expect(allKeys).toContain("agent:test-agent:main");
+    expect(allKeys.length).toBe(2);
   });
 });
