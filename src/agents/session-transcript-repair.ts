@@ -398,6 +398,60 @@ export function repairToolUseResultPairing(messages: AgentMessage[]): ToolUseRep
     // See: https://github.com/openclaw/openclaw/issues/4597
     const stopReason = (assistant as { stopReason?: string }).stopReason;
     if (stopReason === "error" || stopReason === "aborted") {
+      // Even though we skip synthetic tool result creation, we must still strip orphaned
+      // tool call blocks if the next message is NOT a toolResult. Anthropic's API rejects
+      // transcripts where tool_use blocks have no matching tool_result immediately after.
+      // This can happen when switching models (e.g., Grok → Anthropic): the Grok model
+      // may have produced a tool_use with stopReason "error" and no corresponding result.
+      const erroredToolCalls = extractToolCallsFromAssistant(assistant);
+      if (erroredToolCalls.length > 0) {
+        // Check if the immediately following messages contain matching tool results.
+        const erroredToolCallIds = new Set(erroredToolCalls.map((t) => t.id));
+        let hasMatchingResults = false;
+        for (let k = i + 1; k < messages.length; k += 1) {
+          const next = messages[k];
+          if (!next || typeof next !== "object") {
+            continue;
+          }
+          const nextRole = (next as { role?: unknown }).role;
+          if (nextRole === "assistant") {
+            break;
+          }
+          if (nextRole === "toolResult") {
+            const id = extractToolResultId(next as Extract<AgentMessage, { role: "toolResult" }>);
+            if (id && erroredToolCallIds.has(id)) {
+              hasMatchingResults = true;
+              break;
+            }
+          }
+        }
+        if (!hasMatchingResults) {
+          // Strip orphaned tool call blocks from the errored/aborted assistant message to
+          // prevent Anthropic API 400 errors ("tool_use ids found without tool_result blocks").
+          const content = Array.isArray(assistant.content) ? assistant.content : [];
+          const TOOL_CALL_TYPES_SET = new Set(["toolCall", "toolUse", "functionCall"]);
+          const filteredContent = content.filter((block) => {
+            if (!block || typeof block !== "object") {
+              return true;
+            }
+            const blockType = (block as { type?: unknown }).type;
+            return typeof blockType !== "string" || !TOOL_CALL_TYPES_SET.has(blockType);
+          });
+          if (filteredContent.length !== content.length) {
+            changed = true;
+            if (filteredContent.length === 0) {
+              // Replace with fallback text so the assistant turn is not empty
+              out.push({
+                ...assistant,
+                content: [{ type: "text", text: "[tool calls omitted — errored response]" }],
+              } as AgentMessage);
+            } else {
+              out.push({ ...assistant, content: filteredContent } as AgentMessage);
+            }
+            continue;
+          }
+        }
+      }
       out.push(msg);
       continue;
     }

@@ -170,6 +170,7 @@ describe("sanitizeToolUseResultPairing", () => {
   it("skips tool call extraction for assistant messages with stopReason 'aborted'", () => {
     // When a request is aborted mid-stream, the assistant message may have incomplete
     // tool_use blocks (with partialJson). We should NOT create synthetic tool_results.
+    // Instead, we strip the orphaned tool call blocks to prevent Anthropic API 400 errors.
     const input = castAgentMessages([
       {
         role: "assistant",
@@ -183,10 +184,76 @@ describe("sanitizeToolUseResultPairing", () => {
 
     // Should NOT add synthetic tool results for aborted messages
     expect(result.added).toHaveLength(0);
-    // Messages should be passed through without synthetic insertions
+    // Messages should be passed through (with tool call blocks stripped to prevent API errors)
     expect(result.messages).toHaveLength(2);
     expect(result.messages[0]?.role).toBe("assistant");
     expect(result.messages[1]?.role).toBe("user");
+    // The orphaned tool call block should be stripped from the assistant message
+    const assistantContent = (result.messages[0] as { content?: unknown[] }).content;
+    expect(Array.isArray(assistantContent)).toBe(true);
+    const toolCallBlocks = (assistantContent ?? []).filter(
+      (b) => b && typeof b === "object" && (b as { type?: unknown }).type === "toolCall",
+    );
+    expect(toolCallBlocks).toHaveLength(0);
+  });
+
+  it("strips orphaned tool call blocks from errored assistant messages when no matching tool result exists (cross-model scenario)", () => {
+    // Scenario: Grok produced a tool_use with stopReason "error" (no matching tool_result).
+    // When switching to Anthropic, the orphaned tool_use causes a 400 error.
+    // Fix: strip the tool call blocks from the errored assistant message.
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call78843178", name: "exec", arguments: {} }],
+        stopReason: "error",
+      },
+      { role: "user", content: "please continue" },
+    ]);
+
+    const result = repairToolUseResultPairing(input);
+
+    expect(result.added).toHaveLength(0);
+    expect(result.messages).toHaveLength(2);
+    expect(result.messages[0]?.role).toBe("assistant");
+    expect(result.messages[1]?.role).toBe("user");
+    // The orphaned tool call block should be stripped
+    const assistantContent = (result.messages[0] as { content?: unknown[] }).content;
+    const toolCallBlocks = (assistantContent ?? []).filter(
+      (b) => b && typeof b === "object" && (b as { type?: unknown }).type === "toolCall",
+    );
+    expect(toolCallBlocks).toHaveLength(0);
+  });
+
+  it("preserves errored assistant tool calls when a matching tool result exists", () => {
+    // If the errored/aborted assistant message already has a matching tool result,
+    // we should NOT strip the tool call block (it's not orphaned).
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_with_result", name: "exec", arguments: {} }],
+        stopReason: "error",
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_with_result",
+        toolName: "exec",
+        content: [{ type: "text", text: "partial result" }],
+        isError: false,
+      },
+      { role: "user", content: "ok" },
+    ]);
+
+    const result = repairToolUseResultPairing(input);
+
+    // Tool call block should be preserved since result exists
+    expect(result.messages[0]?.role).toBe("assistant");
+    const assistantContent = (result.messages[0] as { content?: unknown[] }).content;
+    const toolCallBlocks = (assistantContent ?? []).filter(
+      (b) => b && typeof b === "object" && (b as { type?: unknown }).type === "toolCall",
+    );
+    expect(toolCallBlocks).toHaveLength(1);
+    // The tool result should be dropped as an orphan (since stopReason=error skips pairing)
+    expect(result.droppedOrphanCount).toBe(1);
   });
 
   it("still repairs tool results for normal assistant messages with stopReason 'toolUse'", () => {
