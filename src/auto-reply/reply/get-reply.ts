@@ -9,6 +9,7 @@ import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, loadConfig } from "../../config/config.js";
+import { updateSessionStore } from "../../config/sessions.js";
 import { applyLinkUnderstanding } from "../../link-understanding/apply.js";
 import { applyMediaUnderstanding } from "../../media-understanding/apply.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -186,6 +187,29 @@ export async function getReplyFromConfig(
     defaultModel,
     aliasIndex,
   });
+
+  // Clear session model override if it matches the current default from config.
+  // This allows users to change the default model in openclaw.json and have it
+  // take effect on restart, while preserving explicit user-set overrides.
+  // Fixes #44611 - Gateway restart now applies config model changes.
+  if (sessionEntry && sessionStore && sessionKey && storePath) {
+    const shouldCheckOverride = Boolean(
+      sessionEntry.modelOverride?.trim() || sessionEntry.providerOverride?.trim(),
+    );
+    if (shouldCheckOverride) {
+      const sessionProvider = sessionEntry.providerOverride?.trim() || defaultProvider;
+      const sessionModel = sessionEntry.modelOverride?.trim();
+      if (sessionModel && sessionProvider === defaultProvider && sessionModel === defaultModel) {
+        // Session override matches current default; clear it to follow config updates
+        delete sessionEntry.providerOverride;
+        delete sessionEntry.modelOverride;
+        sessionEntry.updatedAt = Date.now();
+        await updateSessionStore(storePath, (store) => {
+          store[sessionKey] = sessionEntry;
+        });
+      }
+    }
+  }
 
   const channelModelOverride = resolveChannelModelOverride({
     cfg,
