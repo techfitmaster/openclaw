@@ -10,53 +10,9 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { loadSessionStore, updateSessionStore, type SessionEntry } from "../../config/sessions.js";
+import { clearSessionOverrideIfMatchesDefault } from "./clear-session-override.js";
 
-/**
- * Extracted core logic from get-reply.ts for unit testing
- */
-async function clearSessionModelOverrideIfMatches(params: {
-  sessionEntry?: SessionEntry;
-  sessionStore?: Record<string, SessionEntry>;
-  sessionKey?: string;
-  storePath?: string;
-  defaultProvider: string;
-  defaultModel: string;
-}): Promise<boolean> {
-  const { sessionEntry, sessionStore, sessionKey, storePath, defaultProvider, defaultModel } =
-    params;
-
-  if (!sessionEntry || !sessionStore || !sessionKey || !storePath) {
-    return false;
-  }
-
-  const shouldCheckOverride = Boolean(
-    sessionEntry.modelOverride?.trim() || sessionEntry.providerOverride?.trim(),
-  );
-
-  if (!shouldCheckOverride) {
-    return false;
-  }
-
-  const sessionProvider = sessionEntry.providerOverride?.trim() || defaultProvider;
-  const sessionModel = sessionEntry.modelOverride?.trim();
-
-  if (sessionModel && sessionProvider === defaultProvider && sessionModel === defaultModel) {
-    // Session override matches current default; clear it
-    delete sessionEntry.providerOverride;
-    delete sessionEntry.modelOverride;
-    sessionEntry.updatedAt = Date.now();
-
-    await updateSessionStore(storePath, (store) => {
-      store[sessionKey] = sessionEntry;
-    });
-
-    return true; // Cleared
-  }
-
-  return false; // Not cleared
-}
-
-describe("clearSessionModelOverrideIfMatches (unit test for #44611)", () => {
+describe("clearSessionOverrideIfMatchesDefault (unit test for #44611)", () => {
   let tempDir: string;
   let storePath: string;
   const sessionKey = "test-session";
@@ -87,7 +43,7 @@ describe("clearSessionModelOverrideIfMatches (unit test for #44611)", () => {
     await updateSessionStore(storePath, () => sessionStore);
 
     // Execute
-    const cleared = await clearSessionModelOverrideIfMatches({
+    const cleared = await clearSessionOverrideIfMatchesDefault({
       sessionEntry,
       sessionStore,
       sessionKey,
@@ -120,7 +76,7 @@ describe("clearSessionModelOverrideIfMatches (unit test for #44611)", () => {
     await updateSessionStore(storePath, () => sessionStore);
 
     // Execute (different model)
-    const cleared = await clearSessionModelOverrideIfMatches({
+    const cleared = await clearSessionOverrideIfMatchesDefault({
       sessionEntry,
       sessionStore,
       sessionKey,
@@ -148,7 +104,7 @@ describe("clearSessionModelOverrideIfMatches (unit test for #44611)", () => {
     await updateSessionStore(storePath, () => sessionStore);
 
     // Execute (different provider)
-    const cleared = await clearSessionModelOverrideIfMatches({
+    const cleared = await clearSessionOverrideIfMatchesDefault({
       sessionEntry,
       sessionStore,
       sessionKey,
@@ -174,7 +130,7 @@ describe("clearSessionModelOverrideIfMatches (unit test for #44611)", () => {
     await updateSessionStore(storePath, () => sessionStore);
 
     // Execute
-    const cleared = await clearSessionModelOverrideIfMatches({
+    const cleared = await clearSessionOverrideIfMatchesDefault({
       sessionEntry,
       sessionStore,
       sessionKey,
@@ -201,7 +157,7 @@ describe("clearSessionModelOverrideIfMatches (unit test for #44611)", () => {
     await updateSessionStore(storePath, () => sessionStore);
 
     // Execute: Default provider matches (implicit)
-    const cleared = await clearSessionModelOverrideIfMatches({
+    const cleared = await clearSessionOverrideIfMatchesDefault({
       sessionEntry,
       sessionStore,
       sessionKey,
@@ -215,9 +171,61 @@ describe("clearSessionModelOverrideIfMatches (unit test for #44611)", () => {
     expect(sessionEntry.modelOverride).toBeUndefined();
   });
 
+  it("should clear when only providerOverride is set and it matches default", async () => {
+    // Setup: Only provider override, no model override
+    const sessionStore: Record<string, SessionEntry> = {};
+    const sessionEntry: SessionEntry = {
+      providerOverride: "google", // No modelOverride!
+      updatedAt: Date.now(),
+    };
+    sessionStore[sessionKey] = sessionEntry;
+
+    await updateSessionStore(storePath, () => sessionStore);
+
+    // Execute: Default provider matches
+    const cleared = await clearSessionOverrideIfMatchesDefault({
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      defaultProvider: "google",
+      defaultModel: "gemini-2.5-pro",
+    });
+
+    // Verify: Provider-only override matching the default should be cleared
+    expect(cleared).toBe(true);
+    expect(sessionEntry.providerOverride).toBeUndefined();
+  });
+
+  it("should NOT clear when only providerOverride is set but differs from default", async () => {
+    // Setup: Only provider override that doesn't match default
+    const sessionStore: Record<string, SessionEntry> = {};
+    const sessionEntry: SessionEntry = {
+      providerOverride: "anthropic", // Explicit user choice, different from default
+      updatedAt: Date.now(),
+    };
+    sessionStore[sessionKey] = sessionEntry;
+
+    await updateSessionStore(storePath, () => sessionStore);
+
+    // Execute: Default provider is different
+    const cleared = await clearSessionOverrideIfMatchesDefault({
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      defaultProvider: "google",
+      defaultModel: "gemini-2.5-pro",
+    });
+
+    // Verify: Should NOT be cleared — user explicitly chose a different provider
+    expect(cleared).toBe(false);
+    expect(sessionEntry.providerOverride).toBe("anthropic");
+  });
+
   it("should handle missing sessionEntry/sessionStore gracefully", async () => {
     // Execute with missing dependencies
-    const cleared1 = await clearSessionModelOverrideIfMatches({
+    const cleared1 = await clearSessionOverrideIfMatchesDefault({
       sessionEntry: undefined,
       sessionStore: {},
       sessionKey,
@@ -226,7 +234,7 @@ describe("clearSessionModelOverrideIfMatches (unit test for #44611)", () => {
       defaultModel: "gemini-2.5-pro",
     });
 
-    const cleared2 = await clearSessionModelOverrideIfMatches({
+    const cleared2 = await clearSessionOverrideIfMatchesDefault({
       sessionEntry: {} as SessionEntry,
       sessionStore: undefined,
       sessionKey,

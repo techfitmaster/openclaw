@@ -28,6 +28,7 @@ import {
 } from "../fallback-state.js";
 import type { OriginatingChannelType, TemplateContext } from "../templating.js";
 import { resolveResponseUsageMode, type VerboseLevel } from "../thinking.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { runAgentTurnWithFallback } from "./agent-runner-execution.js";
 import {
@@ -500,6 +501,15 @@ export async function runReplyAgent(params: {
     didLogHeartbeatStrip = payloadResult.didLogHeartbeatStrip;
 
     if (replyPayloads.length === 0) {
+      // If the raw payloads contained a SILENT_REPLY_TOKEN, this is intentional silence
+      // (e.g. NO_REPLY from group-chat suppression, heartbeat, or TTS tool).
+      // Signal this via wasSilentReplyRef so callers can skip the fallback error message.
+      if (
+        opts?.wasSilentReplyRef &&
+        payloadArray.some((p) => isSilentReplyText(p.text, SILENT_REPLY_TOKEN))
+      ) {
+        opts.wasSilentReplyRef.value = true;
+      }
       return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
     }
 

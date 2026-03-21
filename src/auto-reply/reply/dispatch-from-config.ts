@@ -370,12 +370,18 @@ export async function dispatchReplyFromConfig(params: {
       systemEvent: shouldRouteToOriginating,
     });
 
+    // Track whether the agent returned an intentional NO_REPLY / SILENT_REPLY_TOKEN.
+    // When this is set, producing zero replies is expected and the fallback error
+    // message must NOT be sent.
+    const wasSilentReplyRef: { value: boolean } = { value: false };
+
     const replyResult = await (params.replyResolver ?? getReplyFromConfig)(
       ctx,
       {
         ...params.replyOptions,
         typingPolicy: typing.typingPolicy,
         suppressTyping: typing.suppressTyping,
+        wasSilentReplyRef,
         onToolResult: (payload: ReplyPayload) => {
           const run = async () => {
             const ttsPayload = await maybeApplyTtsToPayload({
@@ -544,8 +550,11 @@ export async function dispatchReplyFromConfig(params: {
     // Silent failure detection: agent ran but produced no output
     // This can happen when all tool calls fail or model returns empty content
     // Note: Don't check replies.length - it includes suppressed reasoning payloads
+    // Skip the fallback when the agent intentionally returned NO_REPLY — that is a
+    // valid outcome (group-chat suppression, heartbeat, TTS tool, etc.) and must not
+    // be converted into a user-visible error message.
     const totalReplies = counts.final + counts.block + counts.tool;
-    if (!queuedFinal && totalReplies === 0 && blockCount === 0) {
+    if (!queuedFinal && totalReplies === 0 && blockCount === 0 && !wasSilentReplyRef.value) {
       // Send fallback message to inform user instead of silent drop
       const fallbackPayload: ReplyPayload = {
         text: "I wasn't able to complete your request. Please try again or rephrase your message.",

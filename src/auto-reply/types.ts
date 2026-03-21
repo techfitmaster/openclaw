@@ -64,6 +64,12 @@ export type GetReplyOptions = {
   skillFilter?: string[];
   /** Mutable ref to track if a reply was sent (for Slack "first" threading mode). */
   hasRepliedRef?: { value: boolean };
+  /**
+   * Mutable ref set to `true` when the agent intentionally returns NO_REPLY / SILENT_REPLY_TOKEN.
+   * Callers (e.g. dispatch-from-config) use this to skip the silent-failure fallback message,
+   * since an empty output is expected and is not an error in that case.
+   */
+  wasSilentReplyRef?: { value: boolean };
   /** Override agent timeout in seconds (0 = no timeout). Threads through to resolveAgentTimeoutMs. */
   timeoutOverrideSeconds?: number;
 };
