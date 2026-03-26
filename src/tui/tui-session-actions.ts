@@ -186,6 +186,11 @@ export function createSessionActions(context: SessionActionContext) {
     if (entry?.contextTokens !== undefined || defaults?.contextTokens !== undefined) {
       next.contextTokens =
         entry?.contextTokens ?? defaults?.contextTokens ?? state.sessionInfo.contextTokens;
+    } else if (params.force && entry !== undefined && defaults?.contextTokens === undefined) {
+      // When a forced update (e.g. after /model switch) brings an entry without
+      // contextTokens, the server has cleared it (model changed). Clear the
+      // stale cached value so the UI reflects the new model's context window.
+      next.contextTokens = undefined;
     }
     if (entry?.displayName !== undefined) {
       next.displayName = entry.displayName;
