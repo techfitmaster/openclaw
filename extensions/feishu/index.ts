@@ -45,12 +45,16 @@ export {
 } from "./src/mention.js";
 export { feishuPlugin } from "./src/channel.js";
 
+let _registered = false;
+
 const plugin = {
   id: "feishu",
   name: "Feishu",
   description: "Feishu/Lark channel plugin",
   configSchema: emptyPluginConfigSchema(),
   register(api: OpenClawPluginApi) {
+    if (_registered) return;
+    _registered = true;
     setFeishuRuntime(api.runtime);
     api.registerChannel({ plugin: feishuPlugin });
     registerFeishuDocTools(api);
