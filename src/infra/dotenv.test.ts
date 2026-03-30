@@ -125,7 +125,9 @@ describe("loadDotEnv", () => {
         expect(process.env.SAFE_KEY).toBe("from-cwd");
         expect(process.env.BAR).toBe("from-global");
         expect(process.env.NODE_OPTIONS).toBeUndefined();
+        // Relative OPENCLAW_STATE_DIR is blocked (security: cannot redirect state dir via CWD .env)
         expect(process.env.OPENCLAW_STATE_DIR).toBe(stateDir);
+        // Relative OPENCLAW_CONFIG_PATH is blocked (security: cannot redirect config via CWD .env)
         expect(process.env.OPENCLAW_CONFIG_PATH).toBeUndefined();
         expect(process.env.ANTHROPIC_BASE_URL).toBeUndefined();
         expect(process.env.HTTP_PROXY).toBeUndefined();
@@ -133,7 +135,7 @@ describe("loadDotEnv", () => {
     });
   });
 
-  it("blocks OPENCLAW_STATE_DIR from workspace .env even when unset in process env", async () => {
+  it("blocks relative OPENCLAW_STATE_DIR and OPENCLAW_CONFIG_PATH from workspace .env even when unset in process env", async () => {
     await withIsolatedEnvAndCwd(async () => {
       await withDotEnvFixture(async ({ cwdDir }) => {
         await writeEnvFile(
@@ -148,6 +150,31 @@ describe("loadDotEnv", () => {
 
         expect(process.env.OPENCLAW_STATE_DIR).toBeUndefined();
         expect(process.env.OPENCLAW_CONFIG_PATH).toBeUndefined();
+      });
+    });
+  });
+
+  it("allows absolute OPENCLAW_CONFIG_PATH and OPENCLAW_STATE_DIR from workspace .env", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ cwdDir, base }) => {
+        const absoluteStateDir = path.join(base, "my-custom-state");
+        const absoluteConfigPath = path.join(base, "my-config", "openclaw.runtime.json5");
+        await writeEnvFile(
+          path.join(cwdDir, ".env"),
+          [
+            `OPENCLAW_STATE_DIR=${absoluteStateDir}`,
+            `OPENCLAW_CONFIG_PATH=${absoluteConfigPath}`,
+          ].join("\n"),
+        );
+
+        delete process.env.OPENCLAW_STATE_DIR;
+        delete process.env.OPENCLAW_CONFIG_PATH;
+
+        loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
+
+        // Absolute paths are allowed: users legitimately configure these in project-local .env
+        expect(process.env.OPENCLAW_STATE_DIR).toBe(absoluteStateDir);
+        expect(process.env.OPENCLAW_CONFIG_PATH).toBe(absoluteConfigPath);
       });
     });
   });
@@ -217,7 +244,7 @@ describe("loadDotEnv", () => {
 });
 
 describe("loadCliDotEnv", () => {
-  it("blocks OPENCLAW_STATE_DIR from workspace .env even when unset in process env", async () => {
+  it("blocks relative OPENCLAW_STATE_DIR from workspace .env even when unset in process env", async () => {
     await withIsolatedEnvAndCwd(async () => {
       await withDotEnvFixture(async ({ cwdDir }) => {
         await writeEnvFile(path.join(cwdDir, ".env"), "OPENCLAW_STATE_DIR=./evil-state\n");
@@ -260,10 +287,32 @@ describe("loadCliDotEnv", () => {
 
         expect(process.env.SAFE_KEY).toBe("from-cwd");
         expect(process.env.BAR).toBe("from-global");
+        // Relative OPENCLAW_STATE_DIR blocked (prevents redirecting global .env loading)
         expect(process.env.OPENCLAW_STATE_DIR).toBe(stateDir);
+        // Relative OPENCLAW_CONFIG_PATH blocked
         expect(process.env.OPENCLAW_CONFIG_PATH).toBeUndefined();
         expect(process.env.NODE_OPTIONS).toBeUndefined();
         expect(process.env.ANTHROPIC_BASE_URL).toBeUndefined();
+      });
+    });
+  });
+
+  it("allows absolute OPENCLAW_CONFIG_PATH from workspace .env", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ cwdDir, base }) => {
+        const absoluteConfigPath = path.join(base, "config", "openclaw.runtime.json5");
+        await writeEnvFile(
+          path.join(cwdDir, ".env"),
+          `OPENCLAW_CONFIG_PATH=${absoluteConfigPath}\n`,
+        );
+
+        delete process.env.OPENCLAW_CONFIG_PATH;
+        vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
+
+        loadCliDotEnv({ quiet: true });
+
+        // Absolute OPENCLAW_CONFIG_PATH from project .env should be respected
+        expect(process.env.OPENCLAW_CONFIG_PATH).toBe(absoluteConfigPath);
       });
     });
   });

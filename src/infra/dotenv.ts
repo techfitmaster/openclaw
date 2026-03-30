@@ -15,12 +15,21 @@ const BLOCKED_WORKSPACE_DOTENV_KEYS = new Set([
   "NODE_TLS_REJECT_UNAUTHORIZED",
   "NO_PROXY",
   "OPENCLAW_AGENT_DIR",
-  "OPENCLAW_CONFIG_PATH",
   "OPENCLAW_HOME",
   "OPENCLAW_OAUTH_DIR",
   "OPENCLAW_PROFILE",
-  "OPENCLAW_STATE_DIR",
   "PI_CODING_AGENT_DIR",
+]);
+
+/**
+ * Keys that control path resolution and are allowed from a workspace .env only
+ * when the value is an absolute path. Relative paths are blocked to prevent a
+ * malicious workspace from redirecting config/state loading to an attacker-
+ * controlled location (e.g. `OPENCLAW_CONFIG_PATH=./evil-config.json`).
+ */
+const ABSOLUTE_PATH_ONLY_WORKSPACE_DOTENV_KEYS = new Set([
+  "OPENCLAW_CONFIG_PATH",
+  "OPENCLAW_STATE_DIR",
 ]);
 
 const BLOCKED_WORKSPACE_DOTENV_SUFFIXES = ["_BASE_URL"];
@@ -29,18 +38,28 @@ function shouldBlockRuntimeDotEnvKey(key: string): boolean {
   return isDangerousHostEnvVarName(key) || isDangerousHostEnvOverrideVarName(key);
 }
 
-function shouldBlockWorkspaceDotEnvKey(key: string): boolean {
+function shouldBlockWorkspaceDotEnvEntry(key: string, value: string): boolean {
   const upper = key.toUpperCase();
-  return (
-    shouldBlockRuntimeDotEnvKey(upper) ||
-    BLOCKED_WORKSPACE_DOTENV_KEYS.has(upper) ||
-    BLOCKED_WORKSPACE_DOTENV_SUFFIXES.some((suffix) => upper.endsWith(suffix))
-  );
+  if (shouldBlockRuntimeDotEnvKey(upper)) {
+    return true;
+  }
+  if (BLOCKED_WORKSPACE_DOTENV_KEYS.has(upper)) {
+    return true;
+  }
+  if (BLOCKED_WORKSPACE_DOTENV_SUFFIXES.some((suffix) => upper.endsWith(suffix))) {
+    return true;
+  }
+  // Allow path-override keys only when the value is an absolute path.
+  // Relative paths could redirect config loading to a malicious workspace file.
+  if (ABSOLUTE_PATH_ONLY_WORKSPACE_DOTENV_KEYS.has(upper)) {
+    return !path.isAbsolute(value.trim());
+  }
+  return false;
 }
 
 function loadDotEnvFile(params: {
   filePath: string;
-  shouldBlockKey: (key: string) => boolean;
+  shouldBlockEntry: (key: string, value: string) => boolean;
   quiet?: boolean;
 }) {
   let content: string;
@@ -68,7 +87,7 @@ function loadDotEnvFile(params: {
   }
   for (const [rawKey, value] of Object.entries(parsed)) {
     const key = normalizeEnvVarKey(rawKey, { portable: true });
-    if (!key || params.shouldBlockKey(key)) {
+    if (!key || params.shouldBlockEntry(key, value)) {
       continue;
     }
     if (process.env[key] !== undefined) {
@@ -81,7 +100,7 @@ function loadDotEnvFile(params: {
 export function loadRuntimeDotEnvFile(filePath: string, opts?: { quiet?: boolean }) {
   loadDotEnvFile({
     filePath,
-    shouldBlockKey: shouldBlockRuntimeDotEnvKey,
+    shouldBlockEntry: (key) => shouldBlockRuntimeDotEnvKey(key),
     quiet: opts?.quiet ?? true,
   });
 }
@@ -89,7 +108,7 @@ export function loadRuntimeDotEnvFile(filePath: string, opts?: { quiet?: boolean
 export function loadWorkspaceDotEnvFile(filePath: string, opts?: { quiet?: boolean }) {
   loadDotEnvFile({
     filePath,
-    shouldBlockKey: shouldBlockWorkspaceDotEnvKey,
+    shouldBlockEntry: shouldBlockWorkspaceDotEnvEntry,
     quiet: opts?.quiet ?? true,
   });
 }
