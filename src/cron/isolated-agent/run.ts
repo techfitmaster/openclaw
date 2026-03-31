@@ -14,6 +14,7 @@ import { resolveCronStyleNow } from "../../agents/current-time.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { resolveNestedAgentLane } from "../../agents/lanes.js";
+import { LiveSessionModelSwitchError } from "../../agents/live-model-switch.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider, resolveThinkingDefault } from "../../agents/model-selection.js";
@@ -557,7 +558,39 @@ export async function runCronIsolatedAgentTurn(params: {
       runEndedAt = Date.now();
     };
 
-    await runPrompt(commandBody);
+    // Retry loop: if the isolated session starts with the wrong model (e.g. the
+    // gateway default) and the runner detects a LiveSessionModelSwitchError, we
+    // restart with the model requested by the error — mirroring the retry logic
+    // in the main agent runner (agent-runner-execution.ts). Without this, cron
+    // jobs that specify a model different from the agent primary always fail or
+    // silently run with the wrong model.
+    // See: https://github.com/openclaw/openclaw/issues/58065
+    while (true) {
+      try {
+        await runPrompt(commandBody);
+        break;
+      } catch (err) {
+        if (err instanceof LiveSessionModelSwitchError) {
+          provider = err.provider;
+          model = err.model;
+          fallbackProvider = err.provider;
+          fallbackModel = err.model;
+          cronSession.sessionEntry.modelProvider = err.provider;
+          cronSession.sessionEntry.model = err.model;
+          // Persist the corrected model before retrying so sessions_list
+          // reflects the real model even if the retry also fails.
+          try {
+            await persistSessionEntry();
+          } catch (persistErr) {
+            logWarn(
+              `[cron:${params.job.id}] Failed to persist model switch session entry: ${String(persistErr)}`,
+            );
+          }
+          continue;
+        }
+        throw err;
+      }
+    }
     if (!runResult) {
       throw new Error("cron isolated run returned no result");
     }
